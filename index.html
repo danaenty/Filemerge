@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b6e8a">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<title>PDF Merger (offline)</title>
+<style>
+  :root{
+    --bg:#eef3f6; --card:#ffffff; --ink:#14232e; --muted:#5d7080;
+    --line:#cfdbe3; --accent:#0b6e8a; --accent-ink:#ffffff; --danger:#b3261e;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0f1a21; --card:#172630; --ink:#e6eef3; --muted:#93a8b6;
+           --line:#27404f; --accent:#4cc3e0; --accent-ink:#06222b; --danger:#ff8a80; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       padding:max(16px,env(safe-area-inset-top)) 16px 40px}
+  main{max-width:640px;margin:0 auto}
+  h1{font-size:1.5rem;margin:8px 0 4px}
+  p.sub{margin:0 0 20px;color:var(--muted)}
+  .drop{display:block;border:2px dashed var(--line);border-radius:12px;background:var(--card);
+        padding:28px 16px;text-align:center;cursor:pointer}
+  .drop.over{border-color:var(--accent)}
+  .drop input{display:none}
+  .drop strong{color:var(--accent)}
+  ul{list-style:none;margin:16px 0;padding:0}
+  li{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);
+     border-radius:10px;padding:8px 10px;margin-bottom:8px}
+  li .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  li .meta{color:var(--muted);font-size:.85rem}
+  button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);
+         border-radius:8px;padding:6px 10px;cursor:pointer;min-height:40px;min-width:40px}
+  button:focus-visible,.drop:focus-within{outline:3px solid var(--accent);outline-offset:2px}
+  button.x{color:var(--danger)}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600;flex:1}
+  .primary:disabled{opacity:.45;cursor:not-allowed}
+  .setup{background:var(--card);border:1px solid var(--accent);border-radius:10px;padding:12px 14px;margin-bottom:16px}
+  .setup[hidden]{display:none}
+  .setup p{margin:0 0 10px}
+  .setup a{color:var(--accent);align-self:center}
+  #status{margin-top:12px;color:var(--muted);min-height:1.5em}
+  #status.err{color:var(--danger)}
+</style>
+</head>
+<body>
+<main>
+  <h1>PDF Merger</h1>
+  <p class="sub">Works offline. Files never leave your device.</p>
+
+  <div id="setup" class="setup" hidden>
+    <p><strong>One-time setup:</strong> download the library, save it in the same folder as this page, then reload.</p>
+    <div class="row">
+      <button id="dl" class="primary" type="button">Download pdf-lib.min.js</button>
+      <a id="dlfallback" href="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js" target="_blank" rel="noopener">Open direct link</a>
+    </div>
+  </div>
+
+  <label class="drop" id="drop">
+    <input id="file" type="file" accept="application/pdf,.pdf" multiple>
+    <div><strong>Choose PDFs</strong> or drop them here</div>
+  </label>
+
+  <ul id="list" aria-label="Files to merge"></ul>
+
+  <div class="row">
+    <button id="clear" type="button">Clear all</button>
+    <button id="merge" class="primary" type="button" disabled>Merge into one PDF</button>
+  </div>
+  <div id="status" role="status"></div>
+</main>
+
+<!-- Put pdf-lib.min.js in the SAME folder as this file -->
+<script src="pdf-lib.min.js"></script>
+<script>
+(function(){
+  var items = []; // {file, name, size}
+  var $ = function(id){ return document.getElementById(id); };
+  var list=$('list'), statusEl=$('status'), mergeBtn=$('merge'), drop=$('drop');
+
+  function setStatus(msg, isErr){ statusEl.textContent = msg||''; statusEl.className = isErr?'err':''; }
+  function kb(n){ return n>1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB'; }
+
+  if (typeof PDFLib === 'undefined'){
+    $('setup').hidden = false;
+    $('dl').onclick = async function(){
+      var url = $('dlfallback').href;
+      setStatus('Downloading…');
+      try{
+        var res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP '+res.status);
+        var blob = await res.blob();
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = 'pdf-lib.min.js';
+        document.body.appendChild(a); a.click(); a.remove();
+        setStatus('Saved pdf-lib.min.js. Move it next to index.html, then reload this page.');
+      }catch(err){
+        setStatus('Could not download automatically (are you online?). Use "Open direct link" and save the file as pdf-lib.min.js.', true);
+      }
+    };
+  }
+
+  function render(){
+    list.innerHTML = '';
+    items.forEach(function(it, i){
+      var li = document.createElement('li');
+      li.innerHTML = '<span class="name"></span><span class="meta"></span>';
+      li.querySelector('.name').textContent = (i+1)+'. '+it.name;
+      li.querySelector('.meta').textContent = kb(it.size);
+      [['↑','Move up',-1],['↓','Move down',1]].forEach(function(b){
+        var btn = document.createElement('button');
+        btn.type='button'; btn.textContent=b[0]; btn.setAttribute('aria-label', b[1]+' '+it.name);
+        btn.disabled = (b[2]<0 && i===0) || (b[2]>0 && i===items.length-1);
+        btn.onclick = function(){ var j=i+b[2]; var t=items[i]; items[i]=items[j]; items[j]=t; render(); };
+        li.appendChild(btn);
+      });
+      var rm = document.createElement('button');
+      rm.type='button'; rm.className='x'; rm.textContent='✕'; rm.setAttribute('aria-label','Remove '+it.name);
+      rm.onclick = function(){ items.splice(i,1); render(); };
+      li.appendChild(rm);
+      list.appendChild(li);
+    });
+    mergeBtn.disabled = items.length < 2 || typeof PDFLib === 'undefined';
+  }
+
+  function addFiles(files){
+    Array.prototype.forEach.call(files, function(f){
+      if (/\.pdf$/i.test(f.name) || f.type === 'application/pdf'){
+        items.push({file:f, name:f.name, size:f.size});
+      } else {
+        setStatus('Skipped "'+f.name+'": only PDF files are supported.', true);
+      }
+    });
+    render();
+  }
+
+  $('file').addEventListener('change', function(e){ addFiles(e.target.files); e.target.value=''; });
+  ['dragenter','dragover'].forEach(function(ev){
+    drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.add('over'); });
+  });
+  ['dragleave','drop'].forEach(function(ev){
+    drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.remove('over'); });
+  });
+  drop.addEventListener('drop', function(e){ addFiles(e.dataTransfer.files); });
+  $('clear').onclick = function(){ items=[]; setStatus(''); render(); };
+
+  mergeBtn.onclick = async function(){
+    mergeBtn.disabled = true;
+    try{
+      var out = await PDFLib.PDFDocument.create();
+      for (var i=0;i<items.length;i++){
+        setStatus('Merging '+(i+1)+' of '+items.length+': '+items[i].name+'…');
+        var bytes = await items[i].file.arrayBuffer();
+        var src = await PDFLib.PDFDocument.load(bytes, {ignoreEncryption:false});
+        var pages = await out.copyPages(src, src.getPageIndices());
+        pages.forEach(function(p){ out.addPage(p); });
+      }
+      var data = await out.save();
+      var url = URL.createObjectURL(new Blob([data], {type:'application/pdf'}));
+      var a = document.createElement('a');
+      a.href = url; a.download = 'merged.pdf';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 10000);
+      setStatus('Done. Saved merged.pdf ('+out.getPageCount()+' pages).');
+    }catch(err){
+      setStatus('Merge failed: '+(err && err.message ? err.message : err)+'. Password-protected PDFs must be unlocked first.', true);
+    }
+    render();
+  };
+
+  render();
+})();
+if ("serviceWorker" in navigator && location.protocol !== "file:") { navigator.serviceWorker.register("sw.js").catch(function(){}); }
+</script>
+</body>
+</html>
