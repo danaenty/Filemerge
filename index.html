@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0b6e8a">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
-<title>PDF Merger (offline)</title>
+<title>File Merger (offline)</title>
 <style>
   :root{
     --bg:#eef3f6; --card:#ffffff; --ink:#14232e; --muted:#5d7080;
@@ -50,8 +50,8 @@
 </head>
 <body>
 <main>
-  <h1>PDF Merger</h1>
-  <p class="sub">Works offline. Files never leave your device.</p>
+  <h1>File Merger</h1>
+  <p class="sub">Merge PDFs or PowerPoints. Works offline. Files never leave your device.</p>
 
   <div id="setup" class="setup" hidden>
     <p><strong>One-time setup:</strong> download the library, save it in the same folder as this page, then reload.</p>
@@ -62,21 +62,23 @@
   </div>
 
   <label class="drop" id="drop">
-    <input id="file" type="file" accept="application/pdf,.pdf" multiple>
-    <div><strong>Choose PDFs</strong> or drop them here</div>
+    <input id="file" type="file" accept="application/pdf,.pdf,.pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation" multiple>
+    <div><strong>Choose PDFs or .pptx files</strong> or drop them here</div>
   </label>
 
   <ul id="list" aria-label="Files to merge"></ul>
 
   <div class="row">
     <button id="clear" type="button">Clear all</button>
-    <button id="merge" class="primary" type="button" disabled>Merge into one PDF</button>
+    <button id="merge" class="primary" type="button" disabled>Merge into one file</button>
   </div>
   <div id="status" role="status"></div>
 </main>
 
 <!-- Put pdf-lib.min.js in the SAME folder as this file -->
 <script src="pdf-lib.min.js"></script>
+<script src="jszip.min.js"></script>
+<script src="pptx-merge.js"></script>
 <script>
 (function(){
   var items = []; // {file, name, size}
@@ -130,10 +132,10 @@
 
   function addFiles(files){
     Array.prototype.forEach.call(files, function(f){
-      if (/\.pdf$/i.test(f.name) || f.type === 'application/pdf'){
+      if (/\.(pdf|pptx)$/i.test(f.name) || f.type === 'application/pdf'){
         items.push({file:f, name:f.name, size:f.size});
       } else {
-        setStatus('Skipped "'+f.name+'": only PDF files are supported.', true);
+        setStatus('Skipped "'+f.name+'": only .pdf and .pptx files are supported (old .ppt files: re-save as .pptx first).', true);
       }
     });
     render();
@@ -149,26 +151,45 @@
   drop.addEventListener('drop', function(e){ addFiles(e.dataTransfer.files); });
   $('clear').onclick = function(){ items=[]; setStatus(''); render(); };
 
+  function download(data, mime, name){
+    var url = URL.createObjectURL(new Blob([data], {type:mime}));
+    var a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 10000);
+  }
+
   mergeBtn.onclick = async function(){
+    var isPdf = function(it){ return /\.pdf$/i.test(it.name) || it.file.type === 'application/pdf'; };
+    var pdfCount = items.filter(isPdf).length;
+    if (pdfCount !== 0 && pdfCount !== items.length){
+      setStatus('Do not mix PDFs and PowerPoints. Merge each type separately (or save the PowerPoints as PDF first).', true);
+      return;
+    }
     mergeBtn.disabled = true;
     try{
-      var out = await PDFLib.PDFDocument.create();
-      for (var i=0;i<items.length;i++){
-        setStatus('Merging '+(i+1)+' of '+items.length+': '+items[i].name+'…');
-        var bytes = await items[i].file.arrayBuffer();
-        var src = await PDFLib.PDFDocument.load(bytes, {ignoreEncryption:false});
-        var pages = await out.copyPages(src, src.getPageIndices());
-        pages.forEach(function(p){ out.addPage(p); });
+      if (pdfCount === 0){
+        setStatus('Merging PowerPoints…');
+        var bufs = [];
+        for (var j=0;j<items.length;j++) bufs.push(await items[j].file.arrayBuffer());
+        var res = await mergePptx(JSZip, bufs);
+        download(res.data, 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'merged.pptx');
+        setStatus('Done. Saved merged.pptx.' + (res.warnings.length ? ' Note: '+res.warnings.join(' ') : ' Speaker notes in files after the first are not kept.'));
+      } else {
+        var out = await PDFLib.PDFDocument.create();
+        for (var i=0;i<items.length;i++){
+          setStatus('Merging '+(i+1)+' of '+items.length+': '+items[i].name+'…');
+          var bytes = await items[i].file.arrayBuffer();
+          var src = await PDFLib.PDFDocument.load(bytes, {ignoreEncryption:false});
+          var pages = await out.copyPages(src, src.getPageIndices());
+          pages.forEach(function(p){ out.addPage(p); });
+        }
+        var data = await out.save();
+        download(data, 'application/pdf', 'merged.pdf');
+        setStatus('Done. Saved merged.pdf ('+out.getPageCount()+' pages).');
       }
-      var data = await out.save();
-      var url = URL.createObjectURL(new Blob([data], {type:'application/pdf'}));
-      var a = document.createElement('a');
-      a.href = url; a.download = 'merged.pdf';
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(function(){ URL.revokeObjectURL(url); }, 10000);
-      setStatus('Done. Saved merged.pdf ('+out.getPageCount()+' pages).');
     }catch(err){
-      setStatus('Merge failed: '+(err && err.message ? err.message : err)+'. Password-protected PDFs must be unlocked first.', true);
+      setStatus('Merge failed: '+(err && err.message ? err.message : err)+'. Password-protected files must be unlocked first.', true);
     }
     render();
   };

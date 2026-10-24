@@ -1,7 +1,7 @@
 {
-  "name": "PDF Merger",
-  "short_name": "PDF Merger",
-  "description": "Merge PDFs offline on your device.",
+  "name": "File Merger",
+  "short_name": "File Merger",
+  "description": "Merge PDFs and PowerPoints offline on your device.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
